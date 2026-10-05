@@ -1,8 +1,8 @@
 import requests, csv, os
 from datetime import datetime, timedelta
 
-TG_TOKEN = os.getenv("8970734723:AAHBEsffgIT-ut5I47P0bj6xfcwwFUdf1-0")
-TG_CHAT = os.getenv("8894963961")
+TG_TOKEN = os.getenv("TG_TOKEN")
+TG_CHAT = os.getenv("TG_CHAT")
 LOG = "btc_final.csv"
 JAHR_LOG = "btc_jahres_gedaechtnis.csv"
 MARKT_LOG = "markt_chancen.csv"
@@ -51,7 +51,13 @@ def get_jahres_rueckblick():
         data2 = requests.get(url2, timeout=20).json()
         avg = sum([float(x[4]) for x in data2]) / len(data2) if data2 and len(data2)>10 else 0
         return preis_vor_1_jahr, avg
-    except: return 0,0
+    except Exception as e:
+        print("Jahr Fehler", e)
+        return 0,0
+
+def get_zeilen():
+    try: return len(open(LOG,"r",encoding="utf-8").readlines())-1
+    except: return 0
 
 def vorhersage_machen(preis_now, angst_now, jahres_trend):
     try:
@@ -87,13 +93,13 @@ def scanne_gesamten_markt(angst):
                 grund = ""
                 if angst < 30 and -15 < change < -3:
                     score = (30-angst) + abs(change)*2
-                    grund = f"Panik {angst} + Dip {change:.1f}% = Rebound"
+                    grund = f"Panik {angst} + Dip {change:.1f}% = Rebound Chance"
                 elif -20 < change < -7:
                     score = abs(change)*1.5
                     grund = f"Ueberverkauft {change:.1f}%"
                 elif angst >= 30 and -8 < change < -3 and c["market_cap"] > 1000000000:
                     score = abs(change)
-                    grund = f"Gesunder Dip {change:.1f}%"
+                    grund = f"Gesunder Dip {change:.1f}% bei Big Cap"
                 if score > 0:
                     chancen.append((sym, preis, change, grund, score, c["name"]))
             except: pass
@@ -102,7 +108,68 @@ def scanne_gesamten_markt(angst):
         for sym, preis, change, grund, score, name in top3:
             save_markt(sym, preis, change, grund)
         return top3
-    except: return []
+    except Exception as e:
+        print("Markt Fehler", e)
+        return []
+
+def ein_check(mit_jahr=False, cache=[0,0]):
+    try:
+        pr = float(requests.get("https://api.exchange.coinbase.com/products/BTC-EUR/ticker", timeout=10).json()["price"])
+        ag = get_stimmung()
+        save(pr, ag)
+
+        if mit_jahr:
+            try:
+                heute_str = datetime.now().strftime("%Y-%m-%d")
+                schon = heute_str in open(JAHR_LOG,"r",encoding="utf-8").read()
+            except: schon=False
+            if not schon:
+                v1, avg = get_jahres_rueckblick()
+                if v1 > 0:
+                    save_jahr(pr, v1, avg)
+                    cache[0]=v1
+                    cache[1]=avg
+            else:
+                try:
+                    last = list(csv.DictReader(open(JAHR_LOG,"r",encoding="utf-8")))[-1]
+                    cache[0]=float(last["vor_1_jahr"])
+                    cache[1]=float(last["jahres_avg"])
+                except: pass
+
+        trend = (pr/cache[0]-1)*100 if cache[0]>0 else 0
+        prognose, zeilen = vorhersage_machen(pr, ag, trend)
+        top = scanne_gesamten_markt(ag)
+
+        txt = "DEIN BITCOIN BLICK FUER MORGEN:\n"
+        txt += f"BTC Preis: {int(pr)} Euro\n"
+        if ag < 20: txt += f"Stimmung: Extreme Panik {ag} 😱 Alle haben Angst -> oft gute Kauf Zeit\n"
+        elif ag < 40: txt += f"Stimmung: Angst {ag} -> unsicher\n"
+        elif ag < 60: txt += f"Stimmung: Normal {ag}\n"
+        else: txt += f"Stimmung: Gierig {ag} -> alle wollen kaufen\n"
+
+        if prognose is None:
+            txt += f"\nIch habe {zeilen} Mal so was gesehen\n"
+            txt += f"Ich lerne noch, brauche {20-zeilen} Zeilen mehr\n"
+        else:
+            diff = prognose-pr
+            proz = diff/pr*100
+            txt += f"\nMeine 24h Schaetzung: {int(prognose)} Euro ({proz:+.1f}%)\n"
+            txt += f"Ich habe {zeilen} Mal so was gesehen\n"
+
+        txt += "\n--- MARKT CHANCEN SCAN (Top 50) ---\n"
+        if not top:
+            txt += "Gerade keine klaren Dips - Markt ruhig\n"
+        else:
+            for i, (sym, preis, change, grund, score, name) in enumerate(top,1):
+                txt += f"{i}. {sym} ({name}) - {preis:.4f}€ ({change:+.1f}%)\n"
+                txt += f" Grund: {grund}\n"
+
+        txt += f"\nTagebuch: {zeilen} Zeilen + Jahres-Gedaechtnis aktiv"
+        tg(txt)
+        print(f"OK {zeilen} Zeilen {len(top)} Chancen Trend {trend:.1f}%")
+    except Exception as e:
+        print("Fehler", e)
+        tg(f"Fehler: {e}")
 
 if not os.path.exists(LOG):
     open(LOG,"w",newline="",encoding="utf-8").write("zeit,coin,preis,angst\n")
@@ -111,42 +178,5 @@ if not os.path.exists(JAHR_LOG):
 if not os.path.exists(MARKT_LOG):
     open(MARKT_LOG,"w",newline="",encoding="utf-8").write("zeit,coin,preis,change_24h,grund\n")
 
-pr = float(requests.get("https://api.exchange.coinbase.com/products/BTC-EUR/ticker",timeout=10).json()["price"])
-ag = get_stimmung()
-save(pr, ag)
-
-try:
-    heute_str = datetime.now().strftime("%Y-%m-%d")
-    schon = heute_str in open(JAHR_LOG,"r",encoding="utf-8").read()
-except: schon=False
-
-cache_v1=0
-if not schon:
-    v1, avg = get_jahres_rueckblick()
-    if v1>0:
-        save_jahr(pr, v1, avg)
-        cache_v1=v1
-else:
-    try:
-        last = list(csv.DictReader(open(JAHR_LOG,"r",encoding="utf-8")))[-1]
-        cache_v1 = float(last["vor_1_jahr"])
-    except: pass
-
-trend = (pr/cache_v1-1)*100 if cache_v1>0 else 0
-prognose, zeilen = vorhersage_machen(pr, ag, trend)
-top = scanne_gesamten_markt(ag)
-
-txt = f"DEIN BITCOIN BLICK FUER MORGEN:\nBTC Preis: {int(pr)} Euro\nStimmung: {ag}\n"
-if prognose is None:
-    txt+=f"\nIch habe {zeilen} Zeilen, brauche {max(0,20-zeilen)} mehr fuer Prognose\n"
-else:
-    txt+=f"\n24h Schaetzung: {int(prognose)} Euro ({(prognose-pr)/pr*100:+.1f}%)\nZeilen: {zeilen}\n"
-if cache_v1>0:
-    txt+=f"Vor 1 Jahr: {int(cache_v1)}€ ({trend:+.1f}%)\n"
-txt+="\n--- MARKT CHANCEN ---\n"
-if not top:
-    txt+="Keine klaren Dips\n"
-else:
-    for i,(sym,preis,change,grund,score,name) in enumerate(top,1):
-        txt+=f"{i}. {sym} {preis:.2f}€ ({change:+.1f}%) Grund: {grund}\n"
-tg(txt)
+ein_check(mit_jahr=True)
+print("Fertig")
