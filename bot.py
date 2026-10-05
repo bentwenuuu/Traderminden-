@@ -1,8 +1,8 @@
 import requests, csv, os
 from datetime import datetime, timedelta
 
-TG_TOKEN = os.getenv("TG_TOKEN")
-TG_CHAT = os.getenv("TG_CHAT")
+TG_TOKEN = os.getenv("8970734723:AAHBEsffgIT-ut5I47P0bj6xfcwwFUdf1-0")
+TG_CHAT = os.getenv("8894963961")
 LOG = "btc_final.csv"
 JAHR_LOG = "btc_jahres_gedaechtnis.csv"
 MARKT_LOG = "markt_chancen.csv"
